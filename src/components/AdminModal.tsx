@@ -168,7 +168,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       setSb3File(null);
       setModuleUrlInput('');
       setSb3UrlInput('');
-      setSubmitSuccess('Data siswa dan file proyek berhasil disimpan!');
+      setSubmitSuccess('Data siswa dan berkas proyek berhasil disimpan secara Realtime ke Firebase!');
       setActiveTab('list');
     } catch (err) {
       console.error('Error saving student:', err);

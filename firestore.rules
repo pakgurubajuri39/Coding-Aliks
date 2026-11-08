@@ -11,12 +11,8 @@ service cloud.firestore {
     }
 
     function isValidStudent(data) {
-      return data.studentName is string 
-        && data.studentName.size() > 0 
-        && data.studentName.size() <= 200
-        && data.competitionIdea is string 
-        && data.competitionIdea.size() > 0 
-        && data.competitionIdea.size() <= 3000;
+      return (!('studentName' in data) || (data.studentName is string && data.studentName.size() > 0 && data.studentName.size() <= 200))
+        && (!('competitionIdea' in data) || (data.competitionIdea is string && data.competitionIdea.size() > 0 && data.competitionIdea.size() <= 3000));
     }
 
     // Test connection check
@@ -24,14 +20,19 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Students collection for Erlass Coding Competition
+    // Students collection for Erlass Coding Competition 2026
     match /students/{studentId} {
-      // Allow all users to read/search student competition projects
+      // Allow all users to read/search student competition projects in real time
       allow read: if true;
 
       // Allow creating, updating, and deleting student competition entries
-      allow create: if isValidId(studentId) && isValidStudent(incoming());
+      allow create: if isValidId(studentId) 
+        && incoming().studentName is string 
+        && incoming().studentName.size() > 0 
+        && isValidStudent(incoming());
+
       allow update: if isValidId(studentId) && isValidStudent(incoming());
+
       allow delete: if isValidId(studentId);
     }
 
