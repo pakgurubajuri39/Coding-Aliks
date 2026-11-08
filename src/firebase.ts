@@ -20,13 +20,34 @@ import {
   uploadBytes, 
   getDownloadURL 
 } from 'firebase/storage';
-import firebaseConfig from '../firebase-applet-config.json';
+import localAppletConfig from '../firebase-applet-config.json';
 import { FirebaseCustomConfig, StudentProject } from './types';
 
-// Initialize Firebase App
-export const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+// Your web app's Firebase configuration
+export const firebaseConfig = {
+  apiKey: "AIzaSyBvC2O9rZezT83jgyPWc_mL2OoH8D5QSEI",
+  authDomain: "erlass-coding-competition-2026.firebaseapp.com",
+  projectId: "erlass-coding-competition-2026",
+  storageBucket: "erlass-coding-competition-2026.firebasestorage.app",
+  messagingSenderId: "430511248174",
+  appId: "1:430511248174:web:f8cc665d29aa646e1f20bf"
+};
 
-const dbId = (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId;
+// Build active configuration with Vercel environment variables & JSON fallback support
+const activeFirebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || localAppletConfig.apiKey || firebaseConfig.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || localAppletConfig.authDomain || firebaseConfig.authDomain,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || localAppletConfig.projectId || firebaseConfig.projectId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || localAppletConfig.storageBucket || firebaseConfig.storageBucket,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || localAppletConfig.messagingSenderId || firebaseConfig.messagingSenderId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || localAppletConfig.appId || firebaseConfig.appId,
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || (localAppletConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId,
+};
+
+// Initialize Firebase
+export const app = !getApps().length ? initializeApp(activeFirebaseConfig) : getApp();
+
+const dbId = activeFirebaseConfig.firestoreDatabaseId;
 export const db = dbId ? getFirestore(app, dbId) : getFirestore(app);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
