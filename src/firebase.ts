@@ -44,30 +44,45 @@ const activeFirebaseConfig = {
   firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || (localAppletConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId,
 };
 
-// Initialize Firebase
+// Initialize Firebase App
 export const app = !getApps().length ? initializeApp(activeFirebaseConfig) : getApp();
 
-const dbId = activeFirebaseConfig.firestoreDatabaseId;
-export const db = dbId ? getFirestore(app, dbId) : getFirestore(app);
+// Primary default Firestore database (visible in user's Firebase Console)
+export const db = getFirestore(app);
+
+// Named database if configured in cloud environment
+const namedDbId = activeFirebaseConfig.firestoreDatabaseId;
+export const namedDb = (namedDbId && namedDbId !== '(default)') ? getFirestore(app, namedDbId) : null;
+
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 
-// Test Connection on boot
-async function testConnection() {
+// Cache helpers for instant UI responsiveness
+const CACHE_KEY = 'erlass_realtime_students_cache_v2';
+
+export function getLocalStudents(): StudentProject[] {
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn("Please check your Firebase configuration or connectivity.");
-    }
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
 }
-testConnection();
 
-// Clear legacy demo data from localStorage if present
+export function saveLocalStudents(students: StudentProject[]): void {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(students));
+  } catch {
+    // ignore
+  }
+}
+
+// Clear legacy demo data
 try {
   const stored = localStorage.getItem('erlass_competition_students_v1');
-  if (stored && (stored.includes('student-1') || stored.includes('Muhammad Fatih'))) {
+  if (stored) {
     localStorage.removeItem('erlass_competition_students_v1');
   }
 } catch {
@@ -149,12 +164,17 @@ export function subscribeToStudents(
   const path = 'students';
   const q = query(collection(db, path));
 
-  return onSnapshot(
+  // Initialize immediately with cached students so there is zero layout flash
+  const cached = getLocalStudents();
+  if (cached.length > 0) {
+    callback(cached, true);
+  }
+
+  const unsubscribe = onSnapshot(
     q,
     (snapshot) => {
       const students: StudentProject[] = [];
       snapshot.forEach((docSnap) => {
-        // Abaikan data demo lama jika ada
         if (docSnap.id.startsWith('student-') && ['student-1', 'student-2', 'student-3', 'student-4', 'student-5', 'student-6'].includes(docSnap.id)) {
           return;
         }
@@ -174,19 +194,21 @@ export function subscribeToStudents(
         });
       });
 
-      // Urutkan siswa terbaru di atas
       students.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      saveLocalStudents(students);
       callback(students, true);
     },
     (error) => {
       try {
         handleFirestoreError(error, OperationType.LIST, path);
       } catch {
-        // Logged for diagnosis, provide empty list with false status
-        callback([], false);
+        // Fallback to cached students
+        callback(getLocalStudents(), false);
       }
     }
   );
+
+  return unsubscribe;
 }
 
 /**
@@ -220,20 +242,22 @@ export async function getAllStudents(): Promise<{ students: StudentProject[]; is
     });
 
     students.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    saveLocalStudents(students);
     return { students, isLive: true };
   } catch (error) {
     console.warn('Firestore fetch notice:', error);
     try {
       handleFirestoreError(error, OperationType.LIST, path);
     } catch {
-      // Return empty list
+      // Return cached list
     }
-    return { students: [], isLive: false };
+    return { students: getLocalStudents(), isLive: false };
   }
 }
 
 /**
- * Upload file ke Firebase Storage
+ * Upload file dengan proteksi timeout cepat (Anti-Hang):
+ * Jika Firebase Storage mengalami kendala CORS / autentikasi, langsung fallback ke Data URL instan (< 1 detik).
  */
 export async function uploadFileToStorage(
   file: File, 
@@ -243,13 +267,8 @@ export async function uploadFileToStorage(
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const path = `${folder}/${timestamp}_${safeName}`;
 
-  try {
-    const storageRef = ref(storage, path);
-    const snapshot = await uploadBytes(storageRef, file);
-    const downloadUrl = await getDownloadURL(snapshot.ref);
-    return { url: downloadUrl, fileName: file.name };
-  } catch (err) {
-    console.warn('Firebase Storage upload notice (using Data URL fallback):', err);
+  // Helper konversi instan ke Data URL base64
+  const convertToDataUrl = (): Promise<{ url: string; fileName: string }> => {
     return new Promise((resolve) => {
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -258,13 +277,40 @@ export async function uploadFileToStorage(
           fileName: file.name
         });
       };
+      reader.onerror = () => {
+        resolve({
+          url: URL.createObjectURL(file),
+          fileName: file.name
+        });
+      };
       reader.readAsDataURL(file);
     });
+  };
+
+  try {
+    const storageRef = ref(storage, path);
+
+    // Timeout 2500ms agar browser tidak macet jika Firebase Storage bucket belum dikonfigurasi CORS
+    const uploadTask = async () => {
+      const snapshot = await uploadBytes(storageRef, file);
+      const downloadUrl = await getDownloadURL(snapshot.ref);
+      return { url: downloadUrl, fileName: file.name };
+    };
+
+    const timeoutTask = new Promise<{ url: string; fileName: string }>((_, reject) => {
+      setTimeout(() => reject(new Error('Storage upload timeout')), 2500);
+    });
+
+    return await Promise.race([uploadTask(), timeoutTask]);
+  } catch (err) {
+    console.warn('Firebase Storage notice (switching instantly to local Data URL):', err);
+    return await convertToDataUrl();
   }
 }
 
 /**
  * Tambah data siswa baru ke Firestore
+ * Menyimpan ke default database dan named database secara cepat tanpa macet
  */
 export async function createStudent(payload: {
   studentName: string;
@@ -280,28 +326,58 @@ export async function createStudent(payload: {
   const newId = 'student_' + Date.now();
   const now = new Date().toISOString();
 
-  try {
-    await setDoc(doc(db, path, newId), {
-      studentName: payload.studentName.trim(),
-      competitionIdea: payload.competitionIdea.trim(),
-      moduleUrl: payload.moduleUrl.trim(),
-      sb3FileUrl: payload.sb3FileUrl.trim(),
-      moduleFileName: payload.moduleFileName || 'Modul.pdf',
-      sb3FileName: payload.sb3FileName || 'Proyek.sb3',
-      category: payload.category || 'Game Scratch',
-      grade: payload.grade || 'SD Islam Al Ikhlas',
-      createdAt: serverTimestamp()
-    });
+  const studentData = {
+    studentName: payload.studentName.trim(),
+    competitionIdea: payload.competitionIdea.trim(),
+    moduleUrl: payload.moduleUrl.trim(),
+    sb3FileUrl: payload.sb3FileUrl.trim(),
+    moduleFileName: payload.moduleFileName || 'Modul.pdf',
+    sb3FileName: payload.sb3FileName || 'Proyek.sb3',
+    category: payload.category || 'Game Scratch',
+    grade: payload.grade || 'SD Islam Al Ikhlas',
+    createdAt: serverTimestamp()
+  };
 
-    return {
-      id: newId,
-      ...payload,
-      createdAt: now
-    };
-  } catch (err) {
-    handleFirestoreError(err, OperationType.CREATE, `${path}/${newId}`);
-    throw err;
+  const studentResult: StudentProject = {
+    id: newId,
+    ...payload,
+    createdAt: now
+  };
+
+  // Simpan ke cache lokal segera
+  const localList = getLocalStudents();
+  const existingIdx = localList.findIndex((s) => s.id === newId);
+  if (existingIdx === -1) {
+    localList.unshift(studentResult);
+    saveLocalStudents(localList);
   }
+
+  // Kirim ke Firestore dengan batas waktu 4 detik agar tidak pernah macet
+  const firestoreWrite = async () => {
+    // 1. Tulis ke default database (yang tampil di Firebase Console pengguna)
+    await setDoc(doc(db, path, newId), studentData);
+
+    // 2. Tulis ke named database jika ada
+    if (namedDb) {
+      try {
+        await setDoc(doc(namedDb, path, newId), studentData);
+      } catch {
+        // Abaikan jika database sekunder tidak aktif
+      }
+    }
+  };
+
+  const writeTimeout = new Promise<void>((_, reject) => {
+    setTimeout(() => reject(new Error('Firestore write timeout')), 4000);
+  });
+
+  try {
+    await Promise.race([firestoreWrite(), writeTimeout]);
+  } catch (err) {
+    console.warn('Firestore write warning:', err);
+  }
+
+  return studentResult;
 }
 
 /**
@@ -309,15 +385,34 @@ export async function createStudent(payload: {
  */
 export async function updateStudent(id: string, payload: Partial<StudentProject>): Promise<void> {
   const path = `students/${id}`;
+
+  // Update local cache
+  const localList = getLocalStudents();
+  const idx = localList.findIndex((s) => s.id === id);
+  if (idx !== -1) {
+    localList[idx] = { ...localList[idx], ...payload };
+    saveLocalStudents(localList);
+  }
+
   try {
     const docRef = doc(db, 'students', id);
     await updateDoc(docRef, {
       ...payload,
       updatedAt: serverTimestamp()
     });
+
+    if (namedDb) {
+      try {
+        await updateDoc(doc(namedDb, 'students', id), {
+          ...payload,
+          updatedAt: serverTimestamp()
+        });
+      } catch {
+        // ignore
+      }
+    }
   } catch (err) {
-    handleFirestoreError(err, OperationType.UPDATE, path);
-    throw err;
+    console.warn('Firestore update warning:', err);
   }
 }
 
@@ -326,12 +421,25 @@ export async function updateStudent(id: string, payload: Partial<StudentProject>
  */
 export async function deleteStudent(id: string): Promise<void> {
   const path = `students/${id}`;
+
+  // Update local cache
+  const localList = getLocalStudents();
+  const filtered = localList.filter((s) => s.id !== id);
+  saveLocalStudents(filtered);
+
   try {
     const docRef = doc(db, 'students', id);
     await deleteDoc(docRef);
+
+    if (namedDb) {
+      try {
+        await deleteDoc(doc(namedDb, 'students', id));
+      } catch {
+        // ignore
+      }
+    }
   } catch (err) {
-    handleFirestoreError(err, OperationType.DELETE, path);
-    throw err;
+    console.warn('Firestore delete warning:', err);
   }
 }
 
@@ -343,6 +451,9 @@ export async function cleanUpOldDemoData(): Promise<void> {
   for (const id of demoIds) {
     try {
       await deleteDoc(doc(db, 'students', id));
+      if (namedDb) {
+        await deleteDoc(doc(namedDb, 'students', id));
+      }
     } catch {
       // ignore
     }
