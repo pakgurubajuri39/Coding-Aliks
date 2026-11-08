@@ -1,0 +1,58 @@
+{
+  "entities": {
+    "Student": {
+      "title": "Student",
+      "description": "Student participant and their Scratch competition project details",
+      "type": "object",
+      "properties": {
+        "studentName": {
+          "type": "string",
+          "description": "Full name or nickname of the student",
+          "maxLength": 150
+        },
+        "competitionIdea": {
+          "type": "string",
+          "description": "Title and concept description of the competition project",
+          "maxLength": 2000
+        },
+        "moduleUrl": {
+          "type": "string",
+          "description": "URL to the learning module PDF"
+        },
+        "sb3FileUrl": {
+          "type": "string",
+          "description": "URL to the Scratch .sb3 project file"
+        },
+        "moduleFileName": {
+          "type": "string",
+          "description": "File name of the learning module"
+        },
+        "sb3FileName": {
+          "type": "string",
+          "description": "File name of the Scratch project"
+        },
+        "category": {
+          "type": "string",
+          "description": "Category of the Scratch project"
+        },
+        "grade": {
+          "type": "string",
+          "description": "Student grade or class"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp"
+        }
+      },
+      "required": ["studentName", "competitionIdea"]
+    }
+  },
+  "firestore": {
+    "/students/{studentId}": {
+      "schema": {
+        "$ref": "#/entities/Student"
+      },
+      "description": "Collection of student competition entries"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Erlass Coding Competition 2026 - SD Islam Al Ikhlas",
+  "description": "Platform interaktif lomba koding Erlass Coding Competition 2026 SD Islam Al Ikhlas untuk siswa dan admin.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
